@@ -369,7 +369,8 @@ public sealed class TsAuthPlatformJourneyTests
         await HttpJourney.CreatePatAsync(client, "Pending deletion proof", owner.Password);
         foreach (var (status, code) in new[] { (HttpStatusCode.Accepted, "pending"), (HttpStatusCode.Conflict, "closure_conflict"), (HttpStatusCode.Conflict, "binding_conflict") })
         {
-            platform.Producer.RefuseNext("DELETE", "/v1/terrascale/account", status, code, "Private producer text must stay hidden.");
+            // A pending closure answers 202 to every resume the dashboard makes before it reports "still in progress".
+            platform.Producer.RefuseNext("DELETE", "/v1/terrascale/account", status, code, "Private producer text must stay hidden.", status == HttpStatusCode.Accepted ? 4 : 1);
             var csrf = await HttpJourney.CsrfAsync(client, "/profile?tab=danger");
             using var deletion = await HttpJourney.PostFormAsync(client, "/api/v1/dashboard/profile/delete", new()
             { ["_csrf"] = csrf, ["email"] = owner.Email });
@@ -384,6 +385,25 @@ public sealed class TsAuthPlatformJourneyTests
             await Assert.That((await Me(client)).GetProperty("organizationId").GetString()).IsEqualTo(personal);
         }
         await Assert.That(platform.Producer.Failures).IsEmpty();
+    }
+
+    [Test]
+    public async Task AccountDeletionResumesAPendingClosureInTheSameSubmit()
+    {
+        await using var platform = await PlatformScenario.StartAsync();
+        var owner = platform.Principal("resumed-account");
+        using var client = platform.Client();
+        using (var login = await HttpJourney.LoginAsync(client, owner.Email, owner.Password))
+            await Assert.That(login.StatusCode).IsEqualTo(HttpStatusCode.SeeOther);
+        var personal = (await Me(client)).GetProperty("organizationId").GetString()!;
+        // TS-975: ts-auth answers 202 while a project closure finishes; one submit resumes it instead of asking the user to retry.
+        platform.Producer.RefuseNext("DELETE", "/v1/terrascale/account", HttpStatusCode.Accepted, "pending", "Closure pending.");
+        var csrf = await HttpJourney.CsrfAsync(client, "/profile?tab=danger");
+        using var deletion = await HttpJourney.PostFormAsync(client, "/api/v1/dashboard/profile/delete", new() { ["_csrf"] = csrf, ["email"] = owner.Email });
+        await Assert.That(deletion.StatusCode).IsEqualTo(HttpStatusCode.SeeOther);
+        await Assert.That(platform.Producer.Count("DELETE", "/v1/terrascale/account", owner.Subject)).IsEqualTo(2);
+        await Assert.That(await platform.StoredAsync(AccountService.AccountsCollection, AccountService.AccountStorageKey(owner.Subject))).IsFalse();
+        await Assert.That(await platform.StoredAsync(AccountService.OrganizationsCollection, personal)).IsFalse();
     }
 
     [Test]
@@ -622,13 +642,15 @@ public sealed class TsAuthPlatformJourneyTests
         private readonly ConcurrentQueue<(string Method, string Path, string User, string Body)> calls = new();
         private readonly ConcurrentQueue<string> failures = new();
         private (string Method, string Path, HttpStatusCode Status, string Code, string Message)? refusal;
+        private int refusals;
         private int pagedRequests;
         public IReadOnlyList<string> Failures => failures.ToArray();
         public int PagedRequests => pagedRequests;
 
         public int Count(string method, string path, string user) => calls.Count(call => call.Method == method && call.Path == path && call.User == user);
         public IReadOnlyList<string> Bodies(string method, string path) => calls.Where(call => call.Method == method && call.Path == path).Select(call => call.Body).ToArray();
-        public void RefuseNext(string method, string path, HttpStatusCode status, string code, string message) { lock (gate) refusal = (method, path, status, code, message); }
+        public void RefuseNext(string method, string path, HttpStatusCode status, string code, string message, int times = 1)
+        { lock (gate) { refusal = (method, path, status, code, message); refusals = times; } }
 
         public string AddOrganization(string name, string ownerId, string ownerEmail = "owner@example.test")
         {
@@ -680,7 +702,7 @@ public sealed class TsAuthPlatformJourneyTests
                 {
                     if (refusal is { } refused && refused.Method == request.Method.Method && refused.Path == path)
                     {
-                        refusal = null;
+                        if (--refusals <= 0) refusal = null;
                         return Error(refused.Status, refused.Code, refused.Message);
                     }
                     return Route(request.Method.Method, path.Split('/', StringSplitOptions.RemoveEmptyEntries)[2..], request.RequestUri.Query, body, caller);
@@ -705,6 +727,13 @@ public sealed class TsAuthPlatformJourneyTests
                 created.Members[caller.UserId] = new(caller.Email, "owner", DateTimeOffset.UtcNow);
                 organizations.Add(created);
                 return Json(Wire(created, caller.UserId), HttpStatusCode.Created);
+            }
+            if (parts is ["account"] && method == "DELETE")
+            {
+                // The caller's sole organizations go with the account; shared ones only lose the membership.
+                organizations.RemoveAll(org => org.Members.ContainsKey(caller.UserId) && org.Members.Count == 1);
+                foreach (var org in organizations) org.Members.Remove(caller.UserId);
+                return new(HttpStatusCode.NoContent);
             }
             if (parts is ["account", "mfa"] && method == "GET")
                 return Json(new { enabled = enrolled.ContainsKey(caller.UserId), recovery_codes_remaining = enrolled.GetValueOrDefault(caller.UserId), manage_url = "https://auth.terrascale.tech/ui/terrascale/security" });

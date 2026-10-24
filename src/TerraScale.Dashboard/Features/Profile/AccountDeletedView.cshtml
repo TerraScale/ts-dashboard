@@ -1,0 +1,22 @@
+@inherits RazorSlice<TerraScale.Dashboard.Shared.UI.DocumentModel>
+@implements IUsesLayout<TerraScale.Dashboard.Shared.UI.Slices.Document, DocumentModel>
+@inject AssetUrls Assets
+<main class="ts-login">
+    <section class="ts-login-hero ts-auth-hero" aria-hidden="true">
+        @(await RenderPartialAsync<TerraScale.Dashboard.Features.Auth.AuthRegionMap>())
+    </section>
+    <div class="ts-login-column">
+        <div class="ts-login-panel">
+            <div class="ts-login-stack">
+                <div class="ts-login-heading">
+                    <span class="ts-login-brand"><img src="@Assets.Url("brand/logo-icon-blue.svg")" alt="" width="25" height="28" decoding="async" /><span class="ts-login-brand-word">TerraScale</span></span>
+                    <div class="ts-auth-heading"><h1 class="ts-auth-title">Account deleted</h1><p class="ts-auth-subtitle">Your TerraScale account, its sessions and the organizations only you belonged to are gone.</p></div>
+                </div>
+                <div class="ts-alert ts-alert-success" role="status"><p class="ts-alert-body">Paid plans of those organizations ended without a refund. Organizations shared with other members keep their data.</p></div>
+                <div class="ts-form"><a class="ts-btn ts-btn-primary ts-btn-block" href="https://terrascale.tech">Go to terrascale.tech</a></div>
+            </div>
+        </div>
+        <footer class="ts-login-footer"><a href="https://docs.terrascale.tech/legal/terms">Terms</a><a href="https://docs.terrascale.tech/legal/privacy">Privacy</a><a href="https://status.terrascale.tech">Status</a></footer>
+    </div>
+</main>
+@functions { public DocumentModel LayoutModel => Model; }

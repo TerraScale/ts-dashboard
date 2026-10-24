@@ -11,6 +11,21 @@ namespace TerraScale.Dashboard.Features.Profile;
 // Paid plans of those organizations end immediately in Stripe, without a refund.
 public static class AccountDeletion
 {
+    // ts-auth answers 202 while project closures finish in the background, and repeating the request resumes them. Closures
+    // usually finish within seconds, so resume a few times before asking the user to try again.
+    private static readonly TimeSpan[] ResumeDelays = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4)];
+
+    private static async Task<bool> DeleteResumingAsync(ITsAuthPlatform platform, SessionRecord session, CancellationToken cancellationToken)
+    {
+        if (await platform.DeleteAccountAsync(session, cancellationToken)) return true;
+        foreach (var delay in ResumeDelays)
+        {
+            await Task.Delay(delay, cancellationToken);
+            if (await platform.DeleteAccountAsync(session, cancellationToken)) return true;
+        }
+        return false;
+    }
+
     public static async Task<IResult> DeleteAsync(HttpContext http, DashboardSessions sessions, AccountService accounts, ITsAuthPlatform platform, IDashboardState state, AccessTokens tokens, StripeBilling billing)
     {
         var context = await AccountRequest.RequireAsync(http, sessions, accounts);
@@ -43,7 +58,7 @@ public static class AccountDeletion
             foreach (var org in sole) await billing.CancelForAccountDeletionAsync(org.Id, org.Name, cancellationToken);
             try
             {
-                if (!await platform.DeleteAccountAsync(context.Session, cancellationToken))
+                if (!await DeleteResumingAsync(platform, context.Session, cancellationToken))
                     throw new AccountAccessException("Account deletion is still in progress. Try again shortly; your dashboard records will stay until deletion is confirmed.", 409, "deletion_pending");
             }
             catch (AccountAccessException error) when (error.Code == "last_owner")
@@ -71,7 +86,7 @@ public static class AccountDeletion
         await DropAsync(state, AccountService.IdentitiesCollection, key, cancellationToken);
         await sessions.RevokeUserAsync(context.UserId, cancellationToken);
         await sessions.EndAsync(http);
-        return HttpRedirects.SeeOther("/login");
+        return HttpRedirects.SeeOther("/account/deleted");
     }
 
     private static async Task DropAsync(IDashboardState state, string collection, string id, CancellationToken cancellationToken)

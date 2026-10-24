@@ -45,6 +45,8 @@ public static class ProfileEndpoints
         endpoints.MapPost("/api/v1/dashboard/profile/language", async (HttpContext http, DashboardSessions sessions, AccountService accounts) =>
             await SaveAsync(http, sessions, accounts, true));
         endpoints.MapPost("/api/v1/dashboard/profile/delete", AccountDeletion.DeleteAsync);
+        // Public: the session ended with the account, so sending the user to /login would bounce through ts-auth with a stale credential.
+        endpoints.MapGet("/account/deleted", (HttpContext http) => AccountDeletedView.Create(new DocumentModel("Account deleted", DocumentModel.NonceFor(http))));
         return endpoints;
     }
 

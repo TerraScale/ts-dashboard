@@ -47,7 +47,13 @@ public sealed class AccountDeletionJourneyTests
         using (var deleted = await scenario.DeleteAsync("  USER@example.com "))
         {
             await Assert.That(deleted.StatusCode).IsEqualTo(HttpStatusCode.SeeOther);
-            await Assert.That(deleted.Headers.Location!.OriginalString).IsEqualTo("/login");
+            await Assert.That(deleted.Headers.Location!.OriginalString).IsEqualTo("/account/deleted");
+        }
+        // TS-975: a public confirmation, not /login bouncing through ts-auth with the ended session.
+        using (var confirmation = await scenario.Client.GetAsync("/account/deleted"))
+        {
+            await Assert.That(confirmation.StatusCode).IsEqualTo(HttpStatusCode.OK);
+            await Assert.That(await confirmation.Content.ReadAsStringAsync()).Contains("Account deleted");
         }
         var key = AccountService.AccountStorageKey(UserId);
         await Assert.That(await scenario.ExistsAsync(AccountService.AccountsCollection, key)).IsFalse();
@@ -92,7 +98,7 @@ public sealed class AccountDeletionJourneyTests
         using (var deleted = await scenario.DeleteAsync(email))
         {
             await Assert.That(deleted.StatusCode).IsEqualTo(HttpStatusCode.SeeOther);
-            await Assert.That(deleted.Headers.Location!.OriginalString).IsEqualTo("/login");
+            await Assert.That(deleted.Headers.Location!.OriginalString).IsEqualTo("/account/deleted");
         }
         await Assert.That(stripe.SubscriptionStatus(binding.SubscriptionId)).IsEqualTo("canceled");
         await Assert.That(stripe.Mutations(binding.CustomerId).Count(path => path == "DELETE /v1/subscriptions/" + binding.SubscriptionId)).IsEqualTo(1);
